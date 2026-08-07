@@ -1,0 +1,197 @@
+#include <Adafruit_PWMServoDriver.h>
+#include <Arduino.h>
+#include <Wire.h>
+
+// Inicializa o PCA9685 no endereço padrão (0x40)
+Adafruit_PWMServoDriver pwm = Adafruit_PWMServoDriver();
+
+// ==============================================================================
+// CONFIGURAÇÕES DO JOYSTICK
+// ==============================================================================
+#define PIN_JOYSTICK_X 34
+#define PIN_JOYSTICK_Y 35
+#define PIN_JOYSTICK_SW 32
+
+// Calibração do seu HW-504
+const int JOYSTICK_DEADZONE = 250;
+const int JOYSTICK_CENTER = 1830;
+
+// ==============================================================================
+// MAPEAMENTO DOS CANAIS DO PCA9685
+// ==============================================================================
+#define SERVO_LR_CHANNEL 6 // Usando porta 6 porque a porta 0 parece estar com defeito/em curto
+#define SERVO_UD_CHANNEL 1 // Up/Down (Pitch)
+#define SERVO_TL_CHANNEL 2 // Top Left (Pálpebra Superior Esquerda)
+#define SERVO_BL_CHANNEL 3 // Bottom Left (Pálpebra Inferior Esquerda)
+#define SERVO_TR_CHANNEL 4 // Top Right (Pálpebra Superior Direita)
+#define SERVO_BR_CHANNEL 5 // Bottom Right (Pálpebra Inferior Direita)
+
+// ==============================================================================
+// CONFIGURAÇÕES DOS LIMITES DOS SERVOS (Ângulos em graus)
+// AJUSTE ISSO DE ACORDO COM A MONTAGEM FÍSICA PARA NÃO QUEIMAR OS SERVOS!
+// ==============================================================================
+// MIN = Posição FECHADA | MAX = Posição ABERTA
+// NOTA: TL e BR são invertidos fisicamente (90 é fechado, 10 é aberto)
+// Limites MUITO pequenos para o Esquerda/Direita para não queimar o motor:
+const int LR_MIN = 85, LR_MAX = 95;
+const int UD_MIN = 60, UD_MAX = 120;
+const int TL_MIN = 90, TL_MAX = 10;
+const int BL_MIN = 10, BL_MAX = 90;
+const int TR_MIN = 10, TR_MAX = 90;
+const int BR_MIN = 90, BR_MAX = 10;
+
+// ==============================================================================
+// VARIÁVEIS DE ESTADO (SUAVIZAÇÃO E MODO AUTOMÁTICO)
+// ==============================================================================
+int last_lr_angle = 90;
+int last_ud_angle = 90;
+const int max_speed = 5; // Limita a velocidade dos servos para não dar trancos
+
+unsigned long last_joystick_move = 0;
+bool auto_mode = false;
+unsigned long auto_next_action = 0;
+
+// ==============================================================================
+// FUNÇÕES DE CONTROLE DE OLHOS E PÁLPEBRAS
+// ==============================================================================
+
+// Helper para converter ângulo (0-180) para pulso PWM
+void setServoAngle(uint8_t n, int angle) {
+  // A faixa de 500 a 2400 pode estar forçando os servos além do limite
+  // mecânico, fazendo com que fiquem travados olhando para um lado. Vamos
+  // reduzir para a faixa padrão e segura de 1000 a 2000 (1ms a 2ms).
+  int microsec = map(angle, 0, 180, 1000, 2000);
+  pwm.writeMicroseconds(n, microsec);
+}
+
+void blink() {
+  // Fecha todas as pálpebras mandando para os valores MIN
+  setServoAngle(SERVO_TL_CHANNEL, TL_MIN);
+  setServoAngle(SERVO_BL_CHANNEL, BL_MIN);
+  setServoAngle(SERVO_TR_CHANNEL, TR_MIN);
+  setServoAngle(SERVO_BR_CHANNEL, BR_MIN);
+}
+
+void neutral() {
+  // Posição de repouso (olhos pro centro, pálpebras abertas)
+  setServoAngle(SERVO_LR_CHANNEL, 90);
+  setServoAngle(SERVO_UD_CHANNEL, 90);
+  setServoAngle(SERVO_TL_CHANNEL, TL_MAX);
+  setServoAngle(SERVO_BL_CHANNEL, BL_MAX);
+  setServoAngle(SERVO_TR_CHANNEL, TR_MAX);
+  setServoAngle(SERVO_BR_CHANNEL, BR_MAX);
+}
+
+// A mágica matemática do Squinting (Pálpebras acompanham o movimento)
+void control_ud_and_lids(int ud_angle) {
+  // Normaliza a posição de UD para 0.0 (baixo) a 1.0 (cima) usando o range
+  // amplo
+  float ud_range = 140.0 - 40.0;
+  float ud_progress = (ud_angle - 40.0) / ud_range;
+  ud_progress = constrain(ud_progress, 0.0f, 1.0f);
+
+  // Quando olha para cima, fecha um pouco a de baixo. Para baixo, fecha a de
+  // cima
+  float top_close_factor = 0.6 * (1.0 - ud_progress);
+  float bottom_close_factor = 0.6 * ud_progress;
+
+  // Interpola entre o aberto (MAX) e fechado (MIN)
+  int tl_target = TL_MIN + (TL_MAX - TL_MIN) * (1.0 - top_close_factor);
+  int tr_target = TR_MIN + (TR_MAX - TR_MIN) * (1.0 - top_close_factor);
+  int bl_target = BL_MIN + (BL_MAX - BL_MIN) * (1.0 - bottom_close_factor);
+  int br_target = BR_MIN + (BR_MAX - BR_MIN) * (1.0 - bottom_close_factor);
+
+  setServoAngle(SERVO_UD_CHANNEL, ud_angle);
+  setServoAngle(SERVO_TL_CHANNEL, tl_target);
+  setServoAngle(SERVO_TR_CHANNEL, tr_target);
+  setServoAngle(SERVO_BL_CHANNEL, bl_target);
+  setServoAngle(SERVO_BR_CHANNEL, br_target);
+}
+
+int scale_joystick(int pot_value, int out_min, int out_max) {
+  if (abs(pot_value - JOYSTICK_CENTER) < JOYSTICK_DEADZONE) {
+    return 90;
+  }
+
+  float scaled_value;
+  if (pot_value < JOYSTICK_CENTER) {
+    scaled_value = out_min + (float)(pot_value) * (90.0 - out_min) /
+                                 (JOYSTICK_CENTER - JOYSTICK_DEADZONE);
+  } else {
+    scaled_value =
+        90.0 + (float)(pot_value - (JOYSTICK_CENTER + JOYSTICK_DEADZONE)) *
+                   (out_max - 90.0) /
+                   (4095.0 - (JOYSTICK_CENTER + JOYSTICK_DEADZONE));
+  }
+
+  return constrain((int)scaled_value, min(out_min, out_max),
+                   max(out_min, out_max));
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(PIN_JOYSTICK_SW, INPUT_PULLUP);
+
+  // Inicializa I2C no ESP32 usando os pinos originais (fileira de baixo)
+  // SDA = Pino D21
+  // SCL = Pino D22
+  Wire.begin(21, 22);
+
+  Serial.println("Procurando dispositivos I2C...");
+  byte error, address;
+  int nDevices = 0;
+  for (address = 1; address < 127; address++) {
+    Wire.beginTransmission(address);
+    error = Wire.endTransmission();
+    if (error == 0) {
+      Serial.print("Placa encontrada no endereco 0x");
+      if (address < 16)
+        Serial.print("0");
+      Serial.print(address, HEX);
+      Serial.println(" !");
+      nDevices++;
+    }
+  }
+  if (nDevices == 0) {
+    Serial.println("NENHUMA PLACA ENCONTRADA! Verifique os fios.");
+  } else {
+    Serial.println("Escaneamento concluido.");
+  }
+
+  // Inicializa o PCA9685
+  pwm.begin();
+  // Frequência do oscilador interno em torno de 27MHz (default)
+  pwm.setOscillatorFrequency(27000000);
+  // Servos analógicos usam 50Hz (período de 20ms)
+  pwm.setPWMFreq(50);
+
+  Serial.println("Calibrando no Centro...");
+  neutral();
+  delay(1000);
+  last_joystick_move = millis();
+}
+
+void loop() {
+  // Ignoramos o joystick e o modo automático complexo por enquanto.
+  // Vamos fazer um "vai e vem" seguro em TODOS os servos (do canal 0 ao 5)
+  // de 80 a 100 graus. Isso prova que a placa funciona e não queima nada.
+
+  static int angulo = 80;
+  static int direcao = 1;
+
+  angulo += direcao;
+  if (angulo >= 100 || angulo <= 80) {
+    direcao = -direcao;
+  }
+
+  // Move todos os canais do olho
+  setServoAngle(SERVO_LR_CHANNEL, angulo);
+  setServoAngle(SERVO_UD_CHANNEL, angulo);
+  setServoAngle(SERVO_TL_CHANNEL, angulo);
+  setServoAngle(SERVO_BL_CHANNEL, angulo);
+  setServoAngle(SERVO_TR_CHANNEL, angulo);
+  setServoAngle(SERVO_BR_CHANNEL, angulo);
+
+  // Pequena pausa para o movimento ser suave
+  delay(30);
+}
