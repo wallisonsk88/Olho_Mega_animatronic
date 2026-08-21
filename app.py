@@ -43,6 +43,7 @@ class AnimatronicStudio(ctk.CTk):
         self.add_servo_ui("Pálpebra Inf Esq", 27, 20, 160, 90, True)
         self.add_servo_ui("Pálpebra Sup Dir", 26, 20, 160, 90, False)
         self.add_servo_ui("Pálpebra Inf Dir", 25, 20, 160, 90, True)
+        self.add_servo_ui("Pescoço Tilt (Y)", 6, 60, 120, 90, False)
         
         self.btn_add = ctk.CTkButton(self.left_frame, text="+ Adicionar Novo Servo", command=lambda: self.add_servo_ui("Novo Servo", 0, 0, 180, 90, 0))
         self.btn_add.pack(pady=10)

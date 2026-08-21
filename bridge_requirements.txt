@@ -1,0 +1,8 @@
+# Dependências do esp32_bridge.py v2
+# Instale na VPS com: pip install -r bridge_requirements.txt
+
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+edge-tts>=6.1.9
+faster-whisper>=1.0.0
+python-multipart>=0.0.9
