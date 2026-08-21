@@ -20,8 +20,8 @@ Criamos uma ponte (Bridge) de comunicação entre o ESP32 e a Inteligência Arti
 
 2. **O ESP32 (Olho Animatrônico)**
    - **Código:** C++ no PlatformIO (`main.cpp`).
-   - O ESP32 está conectado ao Wi-Fi (`meganet`).
-   - O loop principal aguarda o botão (GPIO 35) ser pressionado.
+   - O código principal do ESP32 agora usa **WiFiManager** (Portal Cativo). Se não encontrar rede Wi-Fi, ele cria a rede "Olho_Animatronic" para configuração pelo celular.
+   - O loop principal aguarda o botão (Agora no **GPIO 13**, com pull-up interno) ser pressionado.
    - Ao pressionar, os olhos arregalam (Expressão Ouvindo), e o ESP32 captura áudio I2S (quando o hardware chegar) e envia um pacote HTTP POST para `http://195.35.19.208:8080/voice`.
    - O ESP32 recebe a resposta em JSON, extrai a "Expressão Facial" baseada no sentimento do Hermes, move os servos e dá Play no áudio recebido.
 
@@ -53,4 +53,10 @@ As peças que estamos aguardando são:
 Quando soldar tudo, a única coisa que precisaremos fazer é testar se o áudio está saindo limpo no alto-falante e se o microfone não está captando muito ruído dos servos. Todo o código (C++ e Python) já está escrito, gravado e pronto para lidar com eles!
 
 ---
-*Status atualizado em: 20 de Agosto de 2026*
+### Histórico de Correções:
+- **Problema de Memória (dram0_0_seg):** Resolvido movendo o buffer de gravação para a memória dinâmica (Heap) no momento de uso.
+- **Botão Fantasma:** O pino 35 flutuante estava disparando a IA sozinho. Trocado para o **Pino 13** usando PULL_UP interno.
+- **Flexibilidade Wi-Fi:** Adicionado `WiFiManager` para conectar em novas redes sem precisar regravar o ESP32.
+
+---
+*Status atualizado em: 21 de Agosto de 2026*
