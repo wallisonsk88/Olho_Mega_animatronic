@@ -80,6 +80,10 @@
 #define PCM_SIZE  (int)(SAMPLE_RATE * RECORD_SECS)
 #define WAV_SIZE  (PCM_SIZE * 2 + 44)
 
+// VAD - Voice Activity Detection
+#define SILENCE_THRESHOLD   500
+#define SILENCE_TIMEOUT_MS  1500
+
 // ==============================================================================
 // CANAIS DOS SERVOS NA PLACA PCA9685  (CÓDIGO ORIGINAL — INALTERADO)
 // ==============================================================================
@@ -288,6 +292,9 @@ int recordWAV(uint8_t* wav_buf) {
     int16_t max_amplitude = 0;
     int32_t max_raw = 0;  // DIAGNÓSTICO: valor bruto máximo antes de qualquer shift
 
+    uint32_t last_speech_time = millis();
+    bool speech_detected = false;
+
     Serial.println("[MIC] Gravando...");
     while (samples_read < PCM_SIZE) {
         int32_t raw32[256];
@@ -307,14 +314,33 @@ int recordWAV(uint8_t* wav_buf) {
             pcm[samples_read++] = sample;
 
             if (abs(sample) > max_amplitude) max_amplitude = abs(sample);
+
+            // VAD: Reseta o timer de silêncio se detectar fala
+            if (abs(sample) > SILENCE_THRESHOLD) {
+                last_speech_time = millis();
+                speech_detected = true;
+            }
+        }
+
+        // Verifica VAD: se já detectou fala e passou tempo de silêncio, corta
+        if (speech_detected && (samples_read > SAMPLE_RATE)) { // min 1 segundo de gravação
+            if (millis() - last_speech_time > SILENCE_TIMEOUT_MS) {
+                Serial.println("[MIC] Silencio detectado, encerrando gravacao antecipadamente.");
+                break;
+            }
+        }
+        // Se nunca detectar fala após 3 segundos, desiste
+        if (!speech_detected && (samples_read > SAMPLE_RATE * 3)) {
+            Serial.println("[MIC] Nenhuma fala detectada. Cancelando.");
+            break;
         }
     }
     // DIAGNÓSTICO: se max_raw for 0, o I2S não recebeu NADA do microfone (problema físico)
     // Se max_raw for != 0 mas max_amplitude for 0, é bug no shift
-    Serial.printf("[MIC] Concluido. Raw Max: %ld | Amplitude Max: %d\n", max_raw, max_amplitude);
+    Serial.printf("[MIC] Concluido. Raw Max: %ld | Amplitude Max: %d | Amostras: %d\n", max_raw, max_amplitude, samples_read);
 
     // Monta o cabeçalho WAV
-    uint32_t data_size    = PCM_SIZE * 2;
+    uint32_t data_size    = samples_read * 2;
     uint32_t file_size    = data_size + 36;
     uint32_t byte_rate    = SAMPLE_RATE * 2;
     uint16_t block_align  = 2;
@@ -338,7 +364,7 @@ int recordWAV(uint8_t* wav_buf) {
     memcpy(wav_buf + 36, "data", 4);
     memcpy(wav_buf + 40, &data_size, 4);
 
-    return WAV_SIZE;
+    return data_size + 44;
 }
 
 // ==============================================================================
