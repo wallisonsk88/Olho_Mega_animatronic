@@ -81,7 +81,7 @@
 #define WAV_SIZE  (PCM_SIZE * 2 + 44)
 
 // VAD - Voice Activity Detection
-#define SILENCE_THRESHOLD   500
+#define SILENCE_THRESHOLD   2000  // Aumentado para ignorar ruído de fundo
 #define SILENCE_TIMEOUT_MS  1500
 
 // ==============================================================================
