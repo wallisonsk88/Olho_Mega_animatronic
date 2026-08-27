@@ -14,6 +14,7 @@ Em 27 de Agosto de 2026, concluímos com sucesso a migração do projeto para a 
 2. **Correção de SPI do Display (ST7789):** Desativamos os pinos de `TFT_CS` e `TFT_BL` no `User_Setup.h`, evitando conflitos de inicialização do GPIO e travamentos ("Guru Meditation Error").
 3. **Correção de Cores Psicodélicas:** Adicionamos `tft.setSwapBytes(true);` para alinhar a leitura (Endianness) Little Endian do ESP32 com o Big Endian exigido pelo display TFT.
 4. **Resolução de Bug no Desenho do Rosto:** Corrigimos uma otimização no `showFace()` que impedia o rosto de ser desenhado na primeira execução.
+5. **VAD (Voice Activity Detection):** Implementamos corte automático de silêncio na gravação. O robô detecta quando o usuário para de falar por 1.5s e envia o áudio imediatamente, economizando banda e acelerando a resposta.
 
 ---
 
@@ -32,7 +33,8 @@ Em 27 de Agosto de 2026, concluímos com sucesso a migração do projeto para a 
    - **Código:** C++ no PlatformIO (`src/main.cpp`).
    - Conectado ao Wi-Fi via WiFiManager (com portal cautivo no primeiro boot).
    - O botão Push-to-Talk está no **GPIO 13** (pull-up interno).
-   - Ao pressionar e segurar o botão, a tela exibe expressão "Ouvindo", grava áudio I2S e envia para a Bridge.
+   - Com apenas **1 clique no botão**, a tela exibe expressão "Ouvindo" e o áudio começa a ser gravado (I2S).
+   - **VAD Ativo:** Assim que o silêncio durar mais de 1.5s, o ESP32 encerra a gravação sozinho, ajusta o tamanho do arquivo WAV e envia para a Bridge instantaneamente.
    - Recebe a resposta em JSON, aplica a expressão facial na tela e toca o MP3 no alto-falante.
 
 ---
