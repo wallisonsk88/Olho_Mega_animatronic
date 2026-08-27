@@ -1,56 +1,85 @@
-# 🤖 Integração Hermes + Olho Animatrônico
+# 🤖 Integração Hermes + Olho Animatrônico (ESP32-S3)
 **Documento de Contexto e Status do Projeto**
 
-Este arquivo foi criado para salvar todo o nosso progresso. Quando os sensores chegarem, basta abrir um novo chat (ou continuar neste mesmo) e me dizer: *"Leia o arquivo HERMES_INTEGRATION.md para lembrarmos onde paramos e continuar a instalação do hardware."*
+Este arquivo foi criado para salvar todo o nosso progresso. Quando precisar continuar, basta abrir um novo chat e dizer: *"Leia o arquivo HERMES_INTEGRATION.md para lembrarmos onde paramos."*
 
 ---
 
-## 🏗️ Arquitetura Atual (Funcionando)
+## ✅ STATUS ATUAL: SISTEMA COMPLETO E FUNCIONANDO NO ESP32-S3
 
-Criamos uma ponte (Bridge) de comunicação entre o ESP32 e a Inteligência Artificial (Hermes Agent).
+Em 27 de Agosto de 2026, concluímos com sucesso a migração do projeto para a placa **ESP32-S3-N16R8**, integrando o display ST7789, o microfone INMP441, e o alto-falante MAX98357A. A comunicação com a VPS e o Hermes Agent está operando perfeitamente.
+
+### Conquistas da Migração (ESP32-S3):
+1. **Ambiente Isolado:** O código agora compila sob a flag `-DTARGET_ESP32_S3` no PlatformIO, mantendo compatibilidade com o ESP32 antigo caso necessário.
+2. **Correção de SPI do Display (ST7789):** Desativamos os pinos de `TFT_CS` e `TFT_BL` no `User_Setup.h`, evitando conflitos de inicialização do GPIO e travamentos ("Guru Meditation Error").
+3. **Correção de Cores Psicodélicas:** Adicionamos `tft.setSwapBytes(true);` para alinhar a leitura (Endianness) Little Endian do ESP32 com o Big Endian exigido pelo display TFT.
+4. **Resolução de Bug no Desenho do Rosto:** Corrigimos uma otimização no `showFace()` que impedia o rosto de ser desenhado na primeira execução.
+
+---
+
+## 🏗️ Arquitetura Atual
 
 1. **A VPS (Servidor Linux na Nuvem)**
    - **IP:** `195.35.19.208`
-   - O Hermes Agent está rodando lá dentro de um container Docker (`hermes-agent-wv9p-hermes-agent-1`).
-   - Criamos um servidor Python (FastAPI) na porta `8080`.
-   - O script da Bridge (`esp32_bridge.py`) usa a biblioteca `faster-whisper` (modelo *tiny*) para converter a sua voz (WAV) em texto.
-   - A Bridge usa `docker exec` para passar seu texto pro Hermes Agent localmente e captura a resposta.
+   - O Hermes Agent está rodando dentro de um container Docker.
+   - Um servidor Python (FastAPI) roda na porta `8080`.
+   - O script da Bridge (`esp32_bridge.py`) usa `faster-whisper` para converter o áudio WAV em texto.
+   - A Bridge chama o Hermes Agent localmente e captura a resposta.
    - O áudio da resposta é gerado usando `edge-tts` (Voz pt-BR Francisca) e salvo como MP3.
-   - A Bridge roda como um serviço nativo do sistema (`hermes-bridge.service`), ou seja, se a VPS reiniciar, a ponte volta a funcionar automaticamente.
+   - A Bridge roda como serviço nativo (`hermes-bridge.service`) — reinicia automaticamente com a VPS.
 
-2. **O ESP32 (Olho Animatrônico)**
-   - **Código:** C++ no PlatformIO (`main.cpp`).
-   - O ESP32 está conectado ao Wi-Fi (`meganet`).
-   - O loop principal aguarda o botão (GPIO 35) ser pressionado.
-   - Ao pressionar, os olhos arregalam (Expressão Ouvindo), e o ESP32 captura áudio I2S (quando o hardware chegar) e envia um pacote HTTP POST para `http://195.35.19.208:8080/voice`.
-   - O ESP32 recebe a resposta em JSON, extrai a "Expressão Facial" baseada no sentimento do Hermes, move os servos e dá Play no áudio recebido.
+2. **O ESP32-S3 (Olho Animatrônico com Tela)**
+   - **Código:** C++ no PlatformIO (`src/main.cpp`).
+   - Conectado ao Wi-Fi via WiFiManager (com portal cautivo no primeiro boot).
+   - O botão Push-to-Talk está no **GPIO 13** (pull-up interno).
+   - Ao pressionar e segurar o botão, a tela exibe expressão "Ouvindo", grava áudio I2S e envia para a Bridge.
+   - Recebe a resposta em JSON, aplica a expressão facial na tela e toca o MP3 no alto-falante.
+
+---
+
+## 🔌 Ligações de Hardware (ESP32-S3 DEFINITIVO)
+
+### Display ST7789 (7 Pinos - Sem CS)
+* **GND**  -> GND
+* **VCC**  -> 3.3V
+* **SCL**  -> Pino **12** (Clock SPI)
+* **SDA**  -> Pino **11** (MOSI)
+* **RES**  -> Pino **8** (Reset)
+* **DC**   -> Pino **9** (Data/Command)
+* **BLK**  -> 3.3V (Luz de Fundo ligada direto)
+
+### Microfone INMP441 → ESP32-S3
+* **VDD**  -> 3.3V
+* **GND**  -> GND
+* **L/R**  -> GND (Canal esquerdo, processado no código como I2S_CHANNEL_FMT_ONLY_RIGHT)
+* **SCK**  -> Pino **5**
+* **WS**   -> Pino **6**
+* **SD**   -> Pino **7**
+
+### Amplificador MAX98357 → ESP32-S3
+* **VIN**  -> 5V
+* **GND**  -> GND
+* **BCLK** -> Pino **15**
+* **LRC**  -> Pino **16**
+* **DIN**  -> Pino **17**
+* **+ / -**-> Alto-falante
+
+### Botão Push-to-Talk
+* **Terminal 1** -> Pino **13**
+* **Terminal 2** -> GND
+
+### Placa PCA9685 (Servos) → ESP32-S3
+* **SDA**  -> Pino **4**
+* **SCL**  -> Pino **3**
+* **VCC**  -> 3.3V
+* **GND**  -> GND
 
 ---
 
-## 🛠️ Próximos Passos (O que fazer quando o hardware chegar)
-
-As peças que estamos aguardando são:
-- **INMP441** (Microfone Omnidirecional I2S)
-- **MAX98357** (Amplificador de Áudio I2S) + Alto-falante
-
-### 1. Ligações do Microfone (INMP441) no ESP32:
-* VDD  --> 3.3V
-* GND  --> GND
-* L/R  --> GND (Para definir como canal Esquerdo)
-* SCK  --> GPIO 32
-* WS   --> GPIO 25
-* SD   --> GPIO 34
-
-### 2. Ligações do Amplificador (MAX98357) no ESP32:
-* VIN  --> 5V (ou 3.3V, depende do volume desejado)
-* GND  --> GND
-* BCLK --> GPIO 26
-* LRC  --> GPIO 27
-* DIN  --> GPIO 14
-* Terminais + e - --> Ligados no Alto-falante
-
-### 3. Finalização
-Quando soldar tudo, a única coisa que precisaremos fazer é testar se o áudio está saindo limpo no alto-falante e se o microfone não está captando muito ruído dos servos. Todo o código (C++ e Python) já está escrito, gravado e pronto para lidar com eles!
+## 🛠️ Próximos Passos (Possíveis Evoluções)
+- [ ] Adicionar suporte a um segundo display para o "Olho Esquerdo" (se desejado).
+- [ ] Integrar os servos físicos (PCA9685) baseados nas emoções captadas pela tela, mesclando o robô físico com a tela digital.
+- [ ] Ajustar a sensibilidade do microfone ou tempo de espera do botão PTT.
 
 ---
-*Status atualizado em: 20 de Agosto de 2026*
+*Status atualizado em: 27 de Agosto de 2026 — Migração para ESP32-S3 concluída e 100% funcional* 🎉

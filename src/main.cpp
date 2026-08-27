@@ -1,9 +1,12 @@
 #include <Arduino.h>
 #include <Wire.h>
+#ifndef TARGET_ESP32_S3
+// PCA9685 só é usado no ESP32 clássico (olho mecânico com servos)
 #include <Adafruit_PWMServoDriver.h>
+#endif
 
 // ==============================================================================
-// [NOVO] INCLUDES — HERMES VOICE INTEGRATION
+// INCLUDES — HERMES VOICE INTEGRATION
 // ==============================================================================
 #include <WiFi.h>
 #include <HTTPClient.h>
@@ -12,8 +15,13 @@
 #include <AudioFileSourceHTTPStream.h>
 #include <AudioGeneratorMP3.h>
 #include <AudioOutputI2S.h>
-
 #include <WiFiManager.h>
+
+#ifdef TARGET_ESP32_S3
+// Display ST7789 — só ativo no ambiente ESP32-S3
+#include <TFT_eSPI.h>
+#include "face_sprites.h"
+#endif
 
 // ==============================================================================
 // [NOVO] CONFIGURAÇÃO DA BRIDGE — edite apenas se mudar o IP da VPS
@@ -21,32 +29,63 @@
 #define BRIDGE_URL  "http://195.35.19.208:8080/voice"  // VPS bridge
 
 // ==============================================================================
-// [NOVO] BOTÃO PUSH-TO-TALK (pressione para falar com Hermes)
+// SELEÇÃO AUTOMÁTICA DE PINOS POR PLACA
+// Compilar com env:esp32dev → pinos do ESP32 clássico
+// Compilar com env:esp32s3  → pinos do ESP32-S3 N16R8
 // ==============================================================================
-#define BTN_PTT 13  // GPIO 13 — possui pull-up interno, resolve o problema do pino flutuando
 
-// ==============================================================================
-// [NOVO] INMP441 — MICROFONE I2S (usa I2S_NUM_0)
-// ==============================================================================
-#define I2S_MIC_SCK  32   // SCK → GPIO 32
-#define I2S_MIC_WS   25   // WS  → GPIO 25
-#define I2S_MIC_SD   34   // SD  → GPIO 34 (input-only pin)
-#define SAMPLE_RATE  16000
-#define RECORD_SECS  2.5
-#define PCM_SIZE     (int)(SAMPLE_RATE * RECORD_SECS)     // amostras int16
-#define WAV_SIZE     (PCM_SIZE * 2 + 44)             // bytes: PCM + header
+#ifdef TARGET_ESP32_S3
+  // ── ESP32-S3 N16R8 DevKitC-1 ─────────────────────────────────────────────
+  // GPIOs 26–32 são PROIBIDOS no S3 (usados pela PSRAM/Flash interna)
+  #define BTN_PTT      13   // Botão PTT → GPIO 13
+  // INMP441 — Microfone I2S (I2S_NUM_0)
+  #define I2S_MIC_SCK   5   // SCK  → GPIO 5
+  #define I2S_MIC_WS    6   // WS   → GPIO 6
+  #define I2S_MIC_SD    7   // SD   → GPIO 7
+  // MAX98357 — Amplificador I2S (I2S_NUM_1)
+  #define I2S_SPK_BCLK 15   // BCLK → GPIO 15
+  #define I2S_SPK_LRC  16   // LRC  → GPIO 16
+  #define I2S_SPK_DIN  14   // DIN  → GPIO 14
+  // I2C — PCA9685 (SCL mudou: GPIO 22 nao existe no S3)
+  #define I2C_SDA      21   // SDA  → GPIO 21
+  #define I2C_SCL       8   // SCL  → GPIO 8 (GPIO 47 era difícil de localizar)
+  // Audio: S3 tem 8MB PSRAM — grava muito mais tempo!
+  #define SAMPLE_RATE  16000
+  #define RECORD_SECS  10.0  // 10s = ~320KB → vai na PSRAM, sem problema!
+  // Alocação na PSRAM externa (ps_malloc)
+  #define AUDIO_MALLOC(size) ps_malloc(size)
 
-// ==============================================================================
-// [NOVO] MAX98357 — AMPLIFICADOR I2S (pinos para ESP8266Audio)
-// ==============================================================================
-#define I2S_SPK_BCLK 26   // BCLK → GPIO 26
-#define I2S_SPK_LRC  27   // LRC  → GPIO 27
-#define I2S_SPK_DIN  14   // DIN  → GPIO 14
+#else
+  // ── ESP32 Clássico (esp32dev) — pinos originais INALTERADOS ──────────────
+  #define BTN_PTT      13   // Botão PTT → GPIO 13
+  // INMP441 — Microfone I2S (I2S_NUM_0)
+  #define I2S_MIC_SCK  32   // SCK  → GPIO 32
+  #define I2S_MIC_WS   25   // WS   → GPIO 25
+  #define I2S_MIC_SD   34   // SD   → GPIO 34 (input-only)
+  // MAX98357 — Amplificador I2S (I2S_NUM_1)
+  #define I2S_SPK_BCLK 26   // BCLK → GPIO 26
+  #define I2S_SPK_LRC  27   // LRC  → GPIO 27
+  #define I2S_SPK_DIN  14   // DIN  → GPIO 14
+  // I2C — PCA9685 (pinos originais)
+  #define I2C_SDA      21   // SDA  → GPIO 21
+  #define I2C_SCL      22   // SCL  → GPIO 22
+  // Audio: ESP32 clássico tem RAM limitada
+  #define SAMPLE_RATE  16000
+  #define RECORD_SECS  3.0   // 3s = limite maximo de RAM com WiFi ativo
+  // Alocação na heap interna (malloc normal)
+  #define AUDIO_MALLOC(size) malloc(size)
+
+#endif
+
+#define PCM_SIZE  (int)(SAMPLE_RATE * RECORD_SECS)
+#define WAV_SIZE  (PCM_SIZE * 2 + 44)
 
 // ==============================================================================
 // CANAIS DOS SERVOS NA PLACA PCA9685  (CÓDIGO ORIGINAL — INALTERADO)
 // ==============================================================================
+#ifndef TARGET_ESP32_S3
 Adafruit_PWMServoDriver pwm = Adafruit_PWMServoDriver();
+#endif
 
 #define SERVO_LR      0   // Pan (Esquerda/Direita)
 #define SERVO_UD      1   // Tilt (Cima/Baixo)
@@ -81,15 +120,56 @@ const float neck_smoothing = 0.05;
 // ==============================================================================
 // [NOVO] VARIÁVEIS DE ESTADO — MODO HERMES
 // ==============================================================================
-bool hermes_mode_active = false;  // true enquanto o ESP32 está se comunicando
+bool hermes_mode_active = false;
+
+#ifdef TARGET_ESP32_S3
+// ==============================================================================
+// DISPLAY ST7789 — Avatar Mobine
+// ==============================================================================
+TFT_eSPI tft = TFT_eSPI();
+// Forçamos um estado inicial inválido para garantir que o primeiro showFace() desenhe a tela
+FaceState current_face = (FaceState)255; 
+
+// Mostra uma expressão no display (carrega da PROGMEM)
+void showFace(FaceState state) {
+    if (state == current_face) return;
+    current_face = state;
+    const uint16_t* sprite = FACE_SPRITES[state];
+    tft.startWrite();
+    tft.setAddrWindow(0, 0, FACE_WIDTH, FACE_HEIGHT);
+    uint16_t row_buf[FACE_WIDTH];
+    for (int y = 0; y < FACE_HEIGHT; y++) {
+        memcpy_P(row_buf, sprite + y * FACE_WIDTH, FACE_WIDTH * sizeof(uint16_t));
+        tft.pushPixels(row_buf, FACE_WIDTH);
+    }
+    tft.endWrite();
+}
+
+void setupDisplay() {
+    Serial.println("[Display] Iniciando tft.init()...");
+    tft.init();
+    Serial.println("[Display] init() OK. Setando rotacao e SwapBytes...");
+    tft.setRotation(0);
+    tft.setSwapBytes(true); // <--- ISSO CORRIGE AS CORES "PSICODÉLICAS"!
+    
+    Serial.println("[Display] Pintando preto...");
+    tft.fillScreen(TFT_BLACK);
+    
+    Serial.println("[Display] Desenhando rosto neutro...");
+    showFace(STATE_FACE_NEUTRAL);
+    Serial.println("[Display] ST7789 240x240 pronto!");
+}
+#endif  // TARGET_ESP32_S3
 
 // ==============================================================================
 // FUNÇÕES DE CONTROLE DE OLHOS E PÁLPEBRAS — CÓDIGO ORIGINAL INALTERADO
 // ==============================================================================
 
 void setServoAngle(uint8_t n, int angle) {
+#ifndef TARGET_ESP32_S3
     int microsec = map(angle, 0, 180, 1000, 2000);
     pwm.writeMicroseconds(n, microsec);
+#endif
 }
 
 void blink() {
@@ -177,7 +257,7 @@ void setupMic() {
         .mode                 = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX),
         .sample_rate          = SAMPLE_RATE,
         .bits_per_sample      = I2S_BITS_PER_SAMPLE_32BIT,  // INMP441: 24-bit em frame 32-bit
-        .channel_format       = I2S_CHANNEL_FMT_ONLY_LEFT,
+        .channel_format       = I2S_CHANNEL_FMT_ONLY_RIGHT,  // TESTE: trocando para RIGHT
         .communication_format = I2S_COMM_FORMAT_STAND_I2S,
         .intr_alloc_flags     = ESP_INTR_FLAG_LEVEL1,
         .dma_buf_count        = 4,
@@ -205,6 +285,9 @@ int recordWAV(uint8_t* wav_buf) {
     size_t bytes_read;
     int samples_read = 0;
 
+    int16_t max_amplitude = 0;
+    int32_t max_raw = 0;  // DIAGNÓSTICO: valor bruto máximo antes de qualquer shift
+
     Serial.println("[MIC] Gravando...");
     while (samples_read < PCM_SIZE) {
         int32_t raw32[256];
@@ -212,12 +295,23 @@ int recordWAV(uint8_t* wav_buf) {
         i2s_read(I2S_NUM_0, raw32, chunk * sizeof(int32_t), &bytes_read, portMAX_DELAY);
         int n = bytes_read / sizeof(int32_t);
         for (int i = 0; i < n; i++) {
-            // INMP441: dados nos bits 31..8 (24-bit left-justified)
-            // Shift de 14 para obter 16-bit com boa amplitude
-            pcm[samples_read++] = (int16_t)(raw32[i] >> 14);
+            // DIAGNÓSTICO: guarda o maior valor bruto (sem shift)
+            if (abs(raw32[i]) > abs(max_raw)) max_raw = raw32[i];
+
+            // INMP441: shift de 10 para converter 24-bit → 16-bit com ganho
+            int32_t sample32 = raw32[i] >> 10;
+            if (sample32 > 32767) sample32 = 32767;
+            if (sample32 < -32768) sample32 = -32768;
+
+            int16_t sample = (int16_t)sample32;
+            pcm[samples_read++] = sample;
+
+            if (abs(sample) > max_amplitude) max_amplitude = abs(sample);
         }
     }
-    Serial.println("[MIC] Gravação concluída.");
+    // DIAGNÓSTICO: se max_raw for 0, o I2S não recebeu NADA do microfone (problema físico)
+    // Se max_raw for != 0 mas max_amplitude for 0, é bug no shift
+    Serial.printf("[MIC] Concluido. Raw Max: %ld | Amplitude Max: %d\n", max_raw, max_amplitude);
 
     // Monta o cabeçalho WAV
     uint32_t data_size    = PCM_SIZE * 2;
@@ -328,54 +422,79 @@ void handleHermesInteraction() {
     Serial.println("\n=== MODO HERMES ATIVADO ===");
     hermes_mode_active = true;
 
-    // 1. Animação "ouvindo"
-    blink();
-    delay(100);
-    expressionListening();
+    // 1. Expressão OUVINDO
+#ifdef TARGET_ESP32_S3
+    showFace(STATE_FACE_LISTENING);
+#else
+    blink(); delay(100); expressionListening();
+#endif
 
-    // 2. Grava áudio (aloca buffer no heap)
-    uint8_t* wav_buffer = (uint8_t*)malloc(WAV_SIZE);
+    // 2. Grava áudio (PSRAM no S3, heap no clássico)
+    uint8_t* wav_buffer = (uint8_t*)AUDIO_MALLOC(WAV_SIZE);
     if (!wav_buffer) {
-        Serial.println("[Erro] Memoria RAM insuficiente para gravar audio!");
+        Serial.println("[Erro] Memoria insuficiente para gravar audio!");
+#ifdef TARGET_ESP32_S3
+        showFace(STATE_FACE_NEUTRAL);
+#else
         neutral();
+#endif
         hermes_mode_active = false;
         return;
     }
     int wav_len = recordWAV(wav_buffer);
 
-    // 3. Animação "pensando" enquanto processa
+    // 3. Expressão PENSANDO enquanto a VPS processa
+#ifdef TARGET_ESP32_S3
+    showFace(STATE_FACE_THINKING);
+#else
     expressionThinking();
+#endif
 
     // 4. Envia para a bridge e recebe resposta
     String audio_url;
     JsonDocument expr_doc;
     String reply = sendToHermes(wav_buffer, wav_len, audio_url, expr_doc);
-
-    // Libera a memória do áudio logo após o envio
     free(wav_buffer);
 
     if (reply.isEmpty()) {
-        Serial.println("[Hermes] Sem resposta. Voltando ao modo autônomo.");
+        Serial.println("[Hermes] Sem resposta. Voltando ao modo autonomo.");
+#ifdef TARGET_ESP32_S3
+        showFace(STATE_FACE_NEUTRAL);
+#else
         neutral();
+#endif
         hermes_mode_active = false;
         return;
     }
 
-    // 5. Aplica a expressão recebida do Hermes nos olhos
+    // 5. Detecta emoção e atualiza o rosto
+#ifdef TARGET_ESP32_S3
+    // Lê a emoção do JSON retornado pelo Hermes
+    String emotion = expr_doc["emotion"] | "neutral";
+    Serial.printf("[Display] Emocao: %s\n", emotion.c_str());
+    if      (emotion == "happy")     showFace(STATE_FACE_HAPPY);
+    else if (emotion == "surprised") showFace(STATE_FACE_SURPRISED);
+    else if (emotion == "thinking")  showFace(STATE_FACE_THINKING);
+    else                             showFace(STATE_FACE_TALKING);
+#else
+    // ESP32 clássico: aplica expressão nos servos
     JsonObject expr = expr_doc["expression"];
-    int lr          = expr["lr"]           | 90;
-    int ud          = expr["ud"]           | 90;
-    float eyelid    = expr["eyelid_open"]  | 1.0f;
+    int lr       = expr["lr"]          | 90;
+    int ud       = expr["ud"]          | 90;
+    float eyelid = expr["eyelid_open"] | 1.0f;
     applyExpression(lr, ud, eyelid);
+#endif
 
-    // 6. Toca o áudio da resposta
+    // 6. Toca o áudio da resposta (boca animada no S3)
     playAudioFromUrl(audio_url);
 
-    // 7. Pisca e volta ao neutro
+    // 7. Volta ao neutro
     delay(300);
-    blink();
-    delay(100);
-    neutral();
+#ifdef TARGET_ESP32_S3
+    showFace(STATE_FACE_NEUTRAL);
+#else
+    blink(); delay(100); neutral();
+#endif
 
     Serial.println("=== MODO HERMES ENCERRADO ===\n");
     hermes_mode_active = false;
@@ -387,15 +506,24 @@ void handleHermesInteraction() {
 void setup() {
     Serial.begin(115200);
 
-    // I2C original — PCA9685
-    Wire.begin(21, 22);
+#ifdef TARGET_ESP32_S3
+    // Diagnóstico da PSRAM
+    delay(500);
+    Serial.printf("[S3] PSRAM livre : %d KB\n", ESP.getFreePsram() / 1024);
+    Serial.printf("[S3] Heap livre  : %d KB\n", ESP.getFreeHeap() / 1024);
+    Serial.printf("[S3] Buffer audio: %d KB (%.0fs @ 16kHz)\n", WAV_SIZE/1024, (float)RECORD_SECS);
+    // Inicializa display (sem PCA9685 — usando display no lugar dos servos)
+    setupDisplay();
+#else
+    // ESP32 clássico — inicializa PCA9685 e servos
+    Wire.begin(I2C_SDA, I2C_SCL);
     pwm.begin();
     pwm.setOscillatorFrequency(27000000);
     pwm.setPWMFreq(50);
-
     Serial.println("Calibrando no Centro...");
     neutral();
     delay(1000);
+#endif
 
     // [NOVO] Botão PTT
     pinMode(BTN_PTT, INPUT_PULLUP);
