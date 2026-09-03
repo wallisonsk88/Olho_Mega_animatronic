@@ -15,6 +15,7 @@ Em 27 de Agosto de 2026, concluímos com sucesso a migração do projeto para a 
 3. **Correção de Cores Psicodélicas:** Adicionamos `tft.setSwapBytes(true);` para alinhar a leitura (Endianness) Little Endian do ESP32 com o Big Endian exigido pelo display TFT.
 4. **Resolução de Bug no Desenho do Rosto:** Corrigimos uma otimização no `showFace()` que impedia o rosto de ser desenhado na primeira execução.
 5. **VAD (Voice Activity Detection):** Implementamos corte automático de silêncio na gravação. O robô detecta quando o usuário para de falar por 1.5s e envia o áudio imediatamente, economizando banda e acelerando a resposta.
+6. **Animações GIF via LittleFS:** Substituímos as imagens estáticas por GIFs animados (usando a biblioteca `AnimatedGIF`). A reprodução roda em uma Task isolada no Core 0 do FreeRTOS, garantindo animações fluidas sem causar gargalos ou estalos no processamento de áudio (I2S).
 
 ---
 
@@ -84,4 +85,4 @@ Em 27 de Agosto de 2026, concluímos com sucesso a migração do projeto para a 
 - [ ] Ajustar a sensibilidade do microfone ou tempo de espera do botão PTT.
 
 ---
-*Status atualizado em: 27 de Agosto de 2026 — Migração para ESP32-S3 concluída e 100% funcional* 🎉
+*Status atualizado em: 03 de Setembro de 2026 — Integração com GIFs animados no display via LittleFS e FreeRTOS concluída com sucesso* 🎉

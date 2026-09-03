@@ -20,7 +20,8 @@
 #ifdef TARGET_ESP32_S3
 // Display ST7789 — só ativo no ambiente ESP32-S3
 #include <TFT_eSPI.h>
-#include "face_sprites.h"
+#include <LittleFS.h>
+#include <AnimatedGIF.h>
 #endif
 
 // ==============================================================================
@@ -131,22 +132,117 @@ bool hermes_mode_active = false;
 // DISPLAY ST7789 — Avatar Mobine
 // ==============================================================================
 TFT_eSPI tft = TFT_eSPI();
-// Forçamos um estado inicial inválido para garantir que o primeiro showFace() desenhe a tela
-FaceState current_face = (FaceState)255; 
 
-// Mostra uma expressão no display (carrega da PROGMEM)
-void showFace(FaceState state) {
-    if (state == current_face) return;
-    current_face = state;
-    const uint16_t* sprite = FACE_SPRITES[state];
-    tft.startWrite();
-    tft.setAddrWindow(0, 0, FACE_WIDTH, FACE_HEIGHT);
-    uint16_t row_buf[FACE_WIDTH];
-    for (int y = 0; y < FACE_HEIGHT; y++) {
-        memcpy_P(row_buf, sprite + y * FACE_WIDTH, FACE_WIDTH * sizeof(uint16_t));
-        tft.pushPixels(row_buf, FACE_WIDTH);
+// ==============================================================================
+// LÓGICA DE GIF ANIMADO (AnimatedGIF + LittleFS)
+// ==============================================================================
+AnimatedGIF gif;
+File gifFile;
+String currentGifPath = "";
+String nextGifPath = "/neutral.gif";
+
+// Callbacks para o LittleFS
+void* GIFOpenFile(const char* fname, int32_t* pSize) {
+    gifFile = LittleFS.open(fname, "r");
+    if (gifFile) {
+        *pSize = gifFile.size();
+        return (void*)&gifFile;
     }
-    tft.endWrite();
+    return NULL;
+}
+void GIFCloseFile(void* pHandle) {
+    File* f = static_cast<File*>(pHandle);
+    if (f != NULL) f->close();
+}
+int32_t GIFReadFile(GIFFILE* pFile, uint8_t* pBuf, int32_t iLen) {
+    int32_t iBytesRead = iLen;
+    File* f = static_cast<File*>(pFile->fHandle);
+    if ((pFile->iSize - pFile->iPos) < iLen)
+        iBytesRead = pFile->iSize - pFile->iPos - 1;
+    if (iBytesRead <= 0) return 0;
+    iBytesRead = (int32_t)f->read(pBuf, iBytesRead);
+    pFile->iPos = f->position();
+    return iBytesRead;
+}
+int32_t GIFSeekFile(GIFFILE* pFile, int32_t iPosition) {
+    File* f = static_cast<File*>(pFile->fHandle);
+    f->seek(iPosition);
+    pFile->iPos = (int32_t)f->position();
+    return pFile->iPos;
+}
+
+// Callback de Desenho no TFT
+void GIFDraw(GIFDRAW* pDraw) {
+    uint8_t* s;
+    uint16_t* usPalette;
+    uint16_t usTemp[240];
+    int x, y, iWidth;
+
+    iWidth = pDraw->iWidth;
+    if (iWidth > 240) iWidth = 240;
+    usPalette = pDraw->pPalette;
+    y = pDraw->iY + pDraw->y; // linha atual
+    s = pDraw->pPixels;
+
+    if (pDraw->ucHasTransparency) {
+        uint8_t *pEnd, c, ucTransparent = pDraw->ucTransparent;
+        int iCount = 0;
+        pEnd = s + iWidth;
+        x = 0;
+        while(x < iWidth) {
+            c = ucTransparent - 1;
+            uint16_t* d = usTemp;
+            while (c != ucTransparent && s < pEnd) {
+                c = *s++;
+                if (c == ucTransparent) s--;
+                else { *d++ = usPalette[c]; iCount++; }
+            }
+            if (iCount) {
+                tft.pushImage(pDraw->iX + x, y, iCount, 1, usTemp);
+                x += iCount;
+                iCount = 0;
+            }
+            c = ucTransparent;
+            while (c == ucTransparent && s < pEnd) {
+                c = *s++;
+                if (c == ucTransparent) iCount++;
+                else s--; 
+            }
+            if (iCount) {
+                x += iCount;
+                iCount = 0;
+            }
+        }
+    } else {
+        for (x = 0; x < iWidth; x++) usTemp[x] = usPalette[*s++];
+        tft.pushImage(pDraw->iX, y, iWidth, 1, usTemp);
+    }
+}
+
+// Tarefa FreeRTOS que roda no Core 0 (paralelo ao áudio) para animar o GIF sem travamentos
+void gifTask(void* parameter) {
+    gif.begin(LITTLE_ENDIAN_PIXELS);
+    while (true) {
+        if (nextGifPath != currentGifPath) {
+            currentGifPath = nextGifPath;
+        }
+        if (gif.open(currentGifPath.c_str(), GIFOpenFile, GIFCloseFile, GIFReadFile, GIFSeekFile, GIFDraw)) {
+            while (nextGifPath == currentGifPath) {
+                int result = gif.playFrame(true, NULL); // true = respeita o delay do frame do GIF
+                if (result == 0) { 
+                    break; // Fim do GIF, sai do while para reabrir e fazer loop
+                }
+            }
+            gif.close();
+        } else {
+            delay(100); // Falha ao abrir o GIF, aguarda antes de tentar de novo
+        }
+    }
+}
+
+// Define qual GIF a task vai carregar na próxima repetição
+void setFaceGif(String gifName) {
+    nextGifPath = "/" + gifName + ".gif";
 }
 
 void setupDisplay() {
@@ -154,14 +250,23 @@ void setupDisplay() {
     tft.init();
     Serial.println("[Display] init() OK. Setando rotacao e SwapBytes...");
     tft.setRotation(0);
-    tft.setSwapBytes(true); // <--- ISSO CORRIGE AS CORES "PSICODÉLICAS"!
+    tft.setSwapBytes(true); // <--- Mantém correção de cores
     
     Serial.println("[Display] Pintando preto...");
     tft.fillScreen(TFT_BLACK);
+
+    if (!LittleFS.begin()) {
+        Serial.println("[Display] FALHA NO LITTLEFS! Formate a placa ou rode Upload File System Image!");
+    } else {
+        Serial.println("[Display] LittleFS OK!");
+    }
     
-    Serial.println("[Display] Desenhando rosto neutro...");
-    showFace(STATE_FACE_NEUTRAL);
-    Serial.println("[Display] ST7789 240x240 pronto!");
+    Serial.println("[Display] Iniciando tarefa de Animacao GIF...");
+    setFaceGif("neutral");
+    // Cria a task no Core 0 para não atrapalhar o Wi-Fi/Áudio (Core 1)
+    xTaskCreatePinnedToCore(gifTask, "GifTask", 4096, NULL, 1, NULL, 0);
+    
+    Serial.println("[Display] ST7789 240x240 e GIFs prontos!");
 }
 #endif  // TARGET_ESP32_S3
 
@@ -450,7 +555,7 @@ void handleHermesInteraction() {
 
     // 1. Expressão OUVINDO
 #ifdef TARGET_ESP32_S3
-    showFace(STATE_FACE_LISTENING);
+    setFaceGif("listening");
 #else
     blink(); delay(100); expressionListening();
 #endif
@@ -460,7 +565,7 @@ void handleHermesInteraction() {
     if (!wav_buffer) {
         Serial.println("[Erro] Memoria insuficiente para gravar audio!");
 #ifdef TARGET_ESP32_S3
-        showFace(STATE_FACE_NEUTRAL);
+        setFaceGif("neutral");
 #else
         neutral();
 #endif
@@ -471,7 +576,7 @@ void handleHermesInteraction() {
 
     // 3. Expressão PENSANDO enquanto a VPS processa
 #ifdef TARGET_ESP32_S3
-    showFace(STATE_FACE_THINKING);
+    setFaceGif("thinking");
 #else
     expressionThinking();
 #endif
@@ -485,7 +590,7 @@ void handleHermesInteraction() {
     if (reply.isEmpty()) {
         Serial.println("[Hermes] Sem resposta. Voltando ao modo autonomo.");
 #ifdef TARGET_ESP32_S3
-        showFace(STATE_FACE_NEUTRAL);
+        setFaceGif("neutral");
 #else
         neutral();
 #endif
@@ -498,10 +603,10 @@ void handleHermesInteraction() {
     // Lê a emoção do JSON retornado pelo Hermes
     String emotion = expr_doc["emotion"] | "neutral";
     Serial.printf("[Display] Emocao: %s\n", emotion.c_str());
-    if      (emotion == "happy")     showFace(STATE_FACE_HAPPY);
-    else if (emotion == "surprised") showFace(STATE_FACE_SURPRISED);
-    else if (emotion == "thinking")  showFace(STATE_FACE_THINKING);
-    else                             showFace(STATE_FACE_TALKING);
+    if      (emotion == "happy")     setFaceGif("happy");
+    else if (emotion == "surprised") setFaceGif("surprised");
+    else if (emotion == "thinking")  setFaceGif("thinking");
+    else                             setFaceGif("talking");
 #else
     // ESP32 clássico: aplica expressão nos servos
     JsonObject expr = expr_doc["expression"];
@@ -517,7 +622,7 @@ void handleHermesInteraction() {
     // 7. Volta ao neutro
     delay(300);
 #ifdef TARGET_ESP32_S3
-    showFace(STATE_FACE_NEUTRAL);
+    setFaceGif("neutral");
 #else
     blink(); delay(100); neutral();
 #endif
