@@ -19,6 +19,9 @@ A VPS processa o áudio, toma decisões com IA e gera a voz do robô.
 ## 2. 🤖 Ambiente ESP32-S3 (O "Corpo")
 O ESP32-S3 captura comandos, reproduz respostas e exibe as emoções através de um olho digital.
 * **Linguagem / Framework:** C++ no PlatformIO (`src/main.cpp`).
+* **Dois Modos de Operação (Compilação Condicional):** 
+  * **ESP32 Clássico (Olho Mecânico):** Utiliza a placa **PCA9685** (via I2C) para controlar 6 micro-servos (Pan, Tilt, Pálpebras). As reações de emoção se transformam em movimentos físicos pré-programados dos servos.
+  * **ESP32-S3 (Olho Digital):** Utiliza uma tela **TFT ST7789**. As emoções são exibidas visualmente na tela através de GIFs animados.
 * **Conectividade:** WiFiManager (cria um portal para colocar a senha da rede caso não consiga conectar).
 * **Multiprocessamento (FreeRTOS):** 
   * **Core 1:** Lida com o áudio, WiFi e requests HTTP para a VPS.
@@ -34,7 +37,19 @@ O ESP32-S3 captura comandos, reproduz respostas e exibe as emoções através de
 
 ## 3. 🔌 Pinagem e Ligações de Hardware (ESP32-S3)
 
-### 🖥️ Tela / Olho Digital (Display ST7789 - 7 Pinos)
+### ⚙️ Movimento Físico (Olho Mecânico - Placa PCA9685)
+*Essa placa é responsável por dar vida ao olho 3D movendo as pálpebras e globo.*
+* **VCC:** 3.3V / 5V (Para a lógica)
+* **V+ (Alimentação dos Servos):** Fonte Externa 5V (OBRIGATÓRIO para aguentar a corrente dos motores)
+* **GND:** GND
+* **SDA:** Pino 21 
+* **SCL:** Pino 22 (No ESP32 Clássico) / Pino 8 (No ESP32-S3)
+* **Canais Usados:** 
+  * Canal 0: Pan (Esquerda/Direita)
+  * Canal 1: Tilt (Cima/Baixo)
+  * Canais 2 a 5: Pálpebras (Superior/Inferior - Esquerda/Direita)
+
+### 🖥️ Tela / Olho Digital (Display ST7789 - 7 Pinos - Opcional no ESP32-S3)
 * **VCC:** 3.3V
 * **GND:** GND
 * **SCL:** Pino 12
@@ -63,9 +78,3 @@ O ESP32-S3 captura comandos, reproduz respostas e exibe as emoções através de
 * **Terminal 1:** Pino 13 (Com PULLUP interno ativo no código)
 * **Terminal 2:** GND
 
-### ⚙️ Movimento Físico (Placa PCA9685 - Servos)*
-* **VCC:** 3.3V
-* **GND:** GND
-* **SDA:** Pino 4
-* **SCL:** Pino 3
-*(Os servos físicos complementam a emoção mostrada na tela digital).*
