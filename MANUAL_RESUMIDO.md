@@ -35,46 +35,38 @@ O ESP32-S3 captura comandos, reproduz respostas e exibe as emoções através de
 
 ---
 
-## 3. 🔌 Pinagem e Ligações de Hardware (ESP32-S3)
+## 3. 🔌 Pinagem e Ligações de Hardware
 
-### ⚙️ Movimento Físico (Olho Mecânico - Placa PCA9685)
-*Essa placa é responsável por dar vida ao olho 3D movendo as pálpebras e globo.*
-* **VCC:** 3.3V / 5V (Para a lógica)
-* **V+ (Alimentação dos Servos):** Fonte Externa 5V (OBRIGATÓRIO para aguentar a corrente dos motores)
-* **GND:** GND
-* **SDA:** Pino 21 
-* **SCL:** Pino 22 (No ESP32 Clássico) / Pino 8 (No ESP32-S3)
-* **Canais Usados:** 
-  * Canal 0: Pan (Esquerda/Direita)
-  * Canal 1: Tilt (Cima/Baixo)
-  * Canais 2 a 5: Pálpebras (Superior/Inferior - Esquerda/Direita)
-
-### 🖥️ Tela / Olho Digital (Display ST7789 - 7 Pinos - Opcional no ESP32-S3)
-* **VCC:** 3.3V
-* **GND:** GND
-* **SCL:** Pino 12
-* **SDA (MOSI):** Pino 11
-* **RES (Reset):** Pino 8
-* **DC:** Pino 9
-* **BLK (Luz):** 3.3V (Ligado direto)
+Como o projeto possui dois modos (Placas diferentes), **muitos pinos mudam** dependendo de qual placa você está usando. Abaixo estão as ligações para cada módulo:
 
 ### 🎙️ Ouvidos (Microfone INMP441)
-* **VDD:** 3.3V
-* **GND:** GND
-* **L/R:** GND (Configurado para canal direito no código)
-* **SCK:** Pino 5
-* **WS:** Pino 6
-* **SD:** Pino 7
+* **VDD:** 3.3V / **GND:** GND / **L/R:** GND
+* **SCK:** Pino **32** *(ESP32 Clássico)* / Pino **5** *(ESP32-S3)*
+* **WS:** Pino **25** *(ESP32 Clássico)* / Pino **6** *(ESP32-S3)*
+* **SD:** Pino **34** *(ESP32 Clássico)* / Pino **7** *(ESP32-S3)*
 
 ### 🔊 Voz (Amplificador MAX98357A)
-* **VIN:** 5V
-* **GND:** GND
-* **BCLK:** Pino 15
-* **LRC:** Pino 16
-* **DIN:** Pino 17
+* **VIN:** 5V / **GND:** GND
+* **BCLK:** Pino **26** *(ESP32 Clássico)* / Pino **15** *(ESP32-S3)*
+* **LRC:** Pino **27** *(ESP32 Clássico)* / Pino **16** *(ESP32-S3)*
+* **DIN:** Pino **14** *(Em ambas as placas)*
 * **+ / - :** Conectados diretamente ao Alto-Falante
 
 ### 🕹️ Interação (Botão PTT)
-* **Terminal 1:** Pino 13 (Com PULLUP interno ativo no código)
+* **Terminal 1:** Pino **13** *(Em ambas as placas, usa o pull-up interno)*
 * **Terminal 2:** GND
+
+### ⚙️ Movimento Físico (Placa PCA9685 - Olho Mecânico)
+* **VCC:** 3.3V ou 5V (Lógica) / **V+:** Fonte Externa 5V (Para os servos) / **GND:** GND
+* **SDA:** Pino **21** *(Em ambas as placas)*
+* **SCL:** Pino **22** *(ESP32 Clássico)* / Pino **8** *(ESP32-S3)*
+* **Canais Usados:** 0 (Pan), 1 (Tilt), 2 a 5 (Pálpebras)
+
+### 🖥️ Tela / Olho Digital (Display ST7789)
+*(Exclusivo para o modo ESP32-S3)*
+* **VCC:** 3.3V / **GND:** GND / **BLK (Luz):** 3.3V
+* **SCL:** Pino **12**
+* **SDA (MOSI):** Pino **11**
+* **RES (Reset):** Pino **8**
+* **DC:** Pino **9**
 
